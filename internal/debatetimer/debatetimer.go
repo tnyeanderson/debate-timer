@@ -2,27 +2,34 @@ package debatetimer
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"time"
 )
 
-type ErrorUnsupportedSpeaker struct {
-	input string
+// GetSpeakerName returns the speaker name from the environment variable based
+// on the speakerNumber, or empty string if not set.
+func GetSpeakerName(speakerNumber int) string {
+	env := fmt.Sprintf("DEBATETIMER_SPEAKER_%v", speakerNumber)
+	return os.Getenv(env)
 }
 
-func NewErrorUnsupportedSpeaker(input string) ErrorUnsupportedSpeaker {
-	return ErrorUnsupportedSpeaker{input}
+// GetSpeakerNameDefault returns the speaker name from the environment variable
+// based on the speakerNumber, or the default speaker name if not set.
+func GetSpeakerNameDefault(speakerNumber int) string {
+	if name := GetSpeakerName(speakerNumber); name != "" {
+		return name
+	}
+	return fmt.Sprintf("Speaker %v", speakerNumber)
 }
 
-func (e ErrorUnsupportedSpeaker) Error() string {
-	return fmt.Sprintf("unsupported speaker %s, only speaker numbers 1-9 are supported", e.input)
-}
-
+// SpeakerTimer is the timer for a given speaker.
 type SpeakerTimer struct {
 	total time.Duration
 	times []time.Duration
 }
 
+// MeanSpeakingTime returns the mean duration of each time a speaker spoke.
 func (s *SpeakerTimer) MeanSpeakingTime() time.Duration {
 	sum := time.Duration(0)
 	for _, duration := range s.times {
@@ -31,6 +38,7 @@ func (s *SpeakerTimer) MeanSpeakingTime() time.Duration {
 	return time.Duration(sum.Nanoseconds() / int64(len(s.times)))
 }
 
+// MedianSpeakingTime returns the median duration of each time a speaker spoke.
 func (s *SpeakerTimer) MedianSpeakingTime() time.Duration {
 	length := len(s.times)
 	if length == 0 {
@@ -51,33 +59,50 @@ func (s *SpeakerTimer) MedianSpeakingTime() time.Duration {
 	return (sorted[lower] + sorted[higher]) / 2
 }
 
+// DebateTimer contains the speaker timers and current state for the overall
+// debate timer.
 type DebateTimer struct {
 	currentSpeakerNumber int
 	currentSpeakerStart  time.Time
 	speakerTimers        map[int]SpeakerTimer
 }
 
-func (d DebateTimer) Report() string {
+// Report returns a Report for the DebateTimer.
+func (d DebateTimer) Report() (*Report, error) {
 	d.endTimer()
-	if len(d.speakerTimers) == 0 {
-		return "no speakers found"
-	}
-	out := ""
+	r := Report{}
 	for speakerNumber, speakerTimer := range d.speakerTimers {
 		mean := speakerTimer.MeanSpeakingTime()
 		median := speakerTimer.MedianSpeakingTime()
-		out += fmt.Sprintf("--- Speaker %v ---\nTotal: %v\nMean: %v\nMedian: %v\n", speakerNumber, speakerTimer.total, mean, median)
+		r = append(r, ReportEntry{
+			Name:   GetSpeakerNameDefault(speakerNumber),
+			Count:  len(speakerTimer.times),
+			Total:  speakerTimer.total,
+			Mean:   mean,
+			Median: median,
+		})
 	}
-	return out
+	return &r, nil
 }
 
+// StartTimer will stop the timer for the current speaker, and begin the timer
+// for speakerNumber.
 func (d *DebateTimer) StartTimer(speakerNumber int) error {
-	if speakerNumber == 0 || speakerNumber > 9 {
-		return ErrorUnsupportedSpeaker{fmt.Sprint(speakerNumber)}
+	if speakerNumber < 1 || speakerNumber > 9 {
+		return NewErrorUnsupportedSpeaker(fmt.Sprint(speakerNumber))
+	}
+	if speakerNumber == d.currentSpeakerNumber {
+		return NewErrorAlreadySpeaking(speakerNumber)
 	}
 	d.endTimer()
 	d.currentSpeakerStart = time.Now()
 	d.currentSpeakerNumber = speakerNumber
+	return nil
+}
+
+// Pause will end all speaker timers.
+func (d *DebateTimer) Pause() error {
+	d.endTimer()
 	return nil
 }
 
